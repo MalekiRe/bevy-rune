@@ -1,0 +1,9 @@
+pub fn get_query_terms() {
+    let terms = ["Stretch"];
+    terms
+}
+
+pub fn query(stretch) {
+  stretch.x = 0.5;
+  stretch.test.yo = 1;
+}
