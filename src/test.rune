@@ -1,9 +1,14 @@
 pub fn get_query_terms() {
-    let terms = ["Stretch"];
+    let terms = [Stretch::term_id()];
     terms
 }
 
-pub fn query(stretch) {
-  stretch.x = 0.5;
-  stretch.test.yo = 1;
+pub fn query(q) {
+  for items in q {
+     match items {
+        (stretch) => {
+            stretch.x = 0.5;
+        }
+     }
+  }
 }

@@ -1,35 +1,43 @@
-use std::cell::OnceCell;
-use std::collections::HashMap;
-use bevy::app::{App, Update};
-use bevy::prelude::{shape, Assets, Camera2dBundle, Color, ColorMaterial, Commands, Component, Mesh, Query, Res, ResMut, Resource, Startup, Transform, Vec3, World, QueryBuilder, Mut, FetchedTerms, Reflect};
+mod help;
+
+use bevy::app::{App, PostStartup, Update};
+use bevy::ecs::component::ComponentId;
+use bevy::prelude::{
+    shape, Assets, Camera2dBundle, Color, ColorMaterial, Commands, Component, FetchedTerms, Mesh,
+    Mut, Query, QueryBuilder, Reflect, Res, ResMut, Resource, Startup, Transform, Vec3, World,
+};
+use bevy::ptr::{Ptr, PtrMut};
+use bevy::reflect::TypePath;
 use bevy::sprite::MaterialMesh2dBundle;
 use bevy::utils::default;
 use bevy::{DefaultPlugins, MinimalPlugins};
+use rune::compile::Named;
 use rune::diagnostics::Diagnostic;
-use rune::{Any, Context, Diagnostics, Hash, Source, Sources, ToTypeHash, Value, Vm};
+use rune::runtime::{Args, GuardedArgs, OwnedTuple, RawStr, SharedPointerGuard, Stack, Type, UnsafeToMut, UnsafeToValue, VmError, VmExecution, VmResult};
+use rune::termcolor::{ColorChoice, StandardStream};
+use rune::{Any, Context, Diagnostics, Hash, Source, Sources, ToTypeHash, ToValue, Value, Vm};
+use std::cell::OnceCell;
+use std::collections::HashMap;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use bevy::ecs::component::ComponentId;
-use bevy::ptr::{Ptr, PtrMut};
-use bevy::reflect::TypePath;
-use rune::compile::Named;
-use rune::runtime::{Args, GuardedArgs, RawStr, SharedPointerGuard, Stack, Type, UnsafeToMut, UnsafeToValue, VmError, VmExecution, VmResult};
-use rune::termcolor::{ColorChoice, StandardStream};
+use crate::help::{AddDynamicComponent, ComponentIdToFn, RuneModule, RunePlugin, TypePathToComponentId};
 
 fn main() {
     println!("Hello, world!");
     let mut app = App::new();
     app.add_plugins(DefaultPlugins);
-    app.insert_resource(IdToValueMap::default());
-    app.insert_resource(ComponentIdToNameMap::default());
-    app.add_systems(Startup, other_startup);
-    app.add_systems(Startup, startup);
+    app.add_plugins(RunePlugin);
+    app.add_dynamic_component::<Stretch>();
+    app.add_systems(PostStartup, startup);
     app.add_systems(Update, every_tick);
     app.add_systems(Update, query_test);
+    // app.insert_resource(IdToValueMap::default());
+    // app.insert_resource(ComponentIdToNameMap::default());
+    // app.add_systems(Startup, other_startup);
     app.run();
 }
-#[derive(Component, Any, Debug)]
+#[derive(Component, Any, TypePath, Debug)]
 pub struct Stretch {
     #[rune(get, set, add_assign, copy)]
     x: f32,
@@ -38,46 +46,57 @@ pub struct Stretch {
     #[rune(get, set)]
     test: TestStruct,
 }
-pub fn other_startup(world: &mut World) {
-    let stretch_id = world.init_component::<Stretch>();
-    world.get_resource_mut::<IdToValueMap>().unwrap().as_mut().0.insert(
-        stretch_id,
-        Box::new(
-        |terms: &mut FetchedTerms, index: usize| {
-            unsafe {
-                terms.fetch::<&mut Stretch>(index).as_mut().unsafe_to_value().unwrap()
-            }
-        })
-    );
-    world.get_resource_mut::<ComponentIdToNameMap>().unwrap().0.insert(
-        "Stretch".to_string(),
-        stretch_id,
-    );
-}
+// pub fn other_startup(world: &mut World) {
+//     let stretch_id = world.init_component::<Stretch>();
+//     world
+//         .get_resource_mut::<IdToValueMap>()
+//         .unwrap()
+//         .as_mut()
+//         .0
+//         .insert(
+//             stretch_id,
+//             Box::new(|terms: &mut FetchedTerms, index: usize| unsafe {
+//                 terms
+//                     .fetch::<&mut Stretch>(index)
+//                     .as_mut()
+//                     .unsafe_to_value()
+//                     .unwrap()
+//             }),
+//         );
+//     world
+//         .get_resource_mut::<ComponentIdToNameMap>()
+//         .unwrap()
+//         .0
+//         .insert("Stretch".to_string(), stretch_id);
+// }
 
 pub fn startup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
+    mut rune_module: ResMut<RuneModule>,
 ) {
     commands.spawn(Camera2dBundle::default());
-    commands.spawn((MaterialMesh2dBundle {
-        mesh: meshes.add(shape::Circle::new(50.).into()).into(),
-        material: materials.add(ColorMaterial::from(Color::PURPLE)),
-        transform: Transform::from_translation(Vec3::new(-150., 0., 0.)),
-        ..default()
-    }, Stretch {
-        x: 1.0,
-        y: 1.0,
-        test: TestStruct {
-            yo: 0
+    commands.spawn((
+        MaterialMesh2dBundle {
+            mesh: meshes.add(shape::Circle::new(50.).into()).into(),
+            material: materials.add(ColorMaterial::from(Color::PURPLE)),
+            transform: Transform::from_translation(Vec3::new(-150., 0., 0.)),
+            ..default()
         },
-    }));
+        Stretch {
+            x: 1.0,
+            y: 1.0,
+            test: TestStruct { yo: 0 },
+        },
+    ));
     let mut context = Context::with_default_modules().unwrap();
-    context.install(this_modules()).unwrap();
+    context.install(&rune_module.0).unwrap();
     let runtime = context.runtime().unwrap();
     let mut source = Sources::new();
-    source.insert(Source::from_path(Path::new("./src/test.rune")).unwrap()).unwrap();
+    source
+        .insert(Source::from_path(Path::new("./src/test.rune")).unwrap())
+        .unwrap();
     let diagnostics = Diagnostics::new();
 
     commands.insert_resource(RuneContext(context));
@@ -86,19 +105,9 @@ pub fn startup(
     commands.insert_resource(RuneDiagnostics(diagnostics));
 }
 
-pub fn this_modules() -> rune::Module {
-    let mut module = rune::Module::new();
-    module.ty::<Stretch>().unwrap();
-    module.ty::<TestStruct>().unwrap();
-    module
-}
-
-#[derive(Default, Resource)]
-pub struct ComponentIdToNameMap(pub HashMap<String, ComponentId>);
-
 pub fn query_test(world: &mut World) {
-    let id_to_value_map = world.remove_resource::<IdToValueMap>().unwrap();
-    let component_id_to_name_map = world.remove_resource::<ComponentIdToNameMap>().unwrap();
+    let component_id_to_fn = world.remove_resource::<ComponentIdToFn>().unwrap();
+    let type_path_to_component_id = world.remove_resource::<TypePathToComponentId>().unwrap();
     let mut sources = world.remove_resource::<RuneSources>().unwrap();
     let context = world.remove_resource::<RuneContext>().unwrap();
     let mut diagnostics = world.remove_resource::<RuneDiagnostics>().unwrap();
@@ -119,7 +128,6 @@ pub fn query_test(world: &mut World) {
 
     let mut query = QueryBuilder::<()>::new(world);
 
-
     let mut query_names = vec![];
     for i in output.into_vec().unwrap().take().unwrap() {
         let i = i.into_string();
@@ -130,50 +138,51 @@ pub fn query_test(world: &mut World) {
         query_names.push(val.to_string());
     }
     for s in &query_names {
-        query.ref_by_id(*component_id_to_name_map.0.get(s).unwrap());
+        query.ref_by_id(*type_path_to_component_id.0.get(s.as_str()).unwrap());
     }
 
     let mut query = query.build();
 
+    let mut query_iter = vec![];
+    let mut guards = vec![];
+
+    let result = rune::prepare(&mut sources)
+        .with_context(&context.0)
+        .with_diagnostics(&mut diagnostics.0)
+        .build()
+        .unwrap();
+
     query.iter_raw(world).for_each(|mut terms| {
-        let result = rune::prepare(&mut sources)
-            .with_context(&context.0)
-            .with_diagnostics(&mut diagnostics.0)
-            .build().unwrap();
 
         let mut v = vec![];
-        let mut guards = vec![];
         for (i, s) in query_names.iter().enumerate() {
-            let component_id = component_id_to_name_map.0.get(s).unwrap();
-            let (value, guard) = id_to_value_map.0.get(component_id).unwrap()(&mut terms, i);
+            let component_id = type_path_to_component_id.0.get(s.as_str()).unwrap();
+            let (value, guard) = component_id_to_fn.0.get(component_id).unwrap()(&mut terms, i);
             v.push(value);
             guards.push(guard);
         }
-
-        let mut vm = Vm::new(runtime.0.clone(), Arc::new(result));
-        let output = vm.call2(["query"], v).unwrap();
+        let v = OwnedTuple::try_from(v).unwrap();
+        query_iter.push(v.to_value().unwrap());
     });
 
+    let query_iter = query_iter.to_value().unwrap();
+
+    let mut vm = Vm::new(runtime.0.clone(), Arc::new(result));
+    let output = vm.call(["query"], (query_iter, )).unwrap();
 
     world.insert_resource(runtime);
     world.insert_resource(sources);
     world.insert_resource(diagnostics);
     world.insert_resource(context);
-    world.insert_resource(id_to_value_map);
-    world.insert_resource(component_id_to_name_map);
+    world.insert_resource(component_id_to_fn);
+    world.insert_resource(type_path_to_component_id);
 }
 
-#[derive(Default, Resource)]
-pub struct IdToValueMap(HashMap<ComponentId, Box<(dyn Fn(&mut FetchedTerms, usize) -> (Value, SharedPointerGuard) + Sync + Send)>>);
-
-pub fn every_tick(
-    q: Query<&Stretch>,
-) {
+pub fn every_tick(q: Query<&Stretch>) {
     for s in q.iter() {
         println!("{:#?}", s);
     }
 }
-
 
 #[derive(Any, TypePath, Debug, Clone)]
 pub struct TestStruct {
