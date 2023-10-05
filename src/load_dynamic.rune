@@ -1,4 +1,0 @@
-mod my_component;
-pub fn dynamic_components() {
-    [my_component::MyDynamicComponent{ hi: 0 }]
-}

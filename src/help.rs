@@ -1,7 +1,7 @@
 use crate::{RuneContext, RuneDiagnostics, RuneRuntime, RuneSources};
 use bevy::app::{App, Plugin, PostStartup, PostUpdate, PreStartup, Startup};
 use bevy::ecs::component::{ComponentDescriptor, ComponentId, StorageType};
-use bevy::prelude::{error, Commands, FetchedTerms, QueryBuilder, Res, ResMut, Resource, Update, World, IntoSystemConfigs, info};
+use bevy::prelude::{error, Commands, FetchedTerms, QueryBuilder, Res, ResMut, Resource, Update, World, IntoSystemConfigs, info, Component};
 use bevy::ptr::{OwningPtr, PtrMut};
 use bevy::reflect::TypePath;
 use rune::__private::FunctionMetaKind;
@@ -16,6 +16,7 @@ use std::collections::HashMap;
 use std::mem::size_of;
 use std::ptr::NonNull;
 use std::sync::Arc;
+use rune::alloc::prelude::TryClone;
 
 pub trait AddDynamicComponent {
     fn add_dynamic_component<T>(&mut self)
@@ -58,14 +59,15 @@ impl AddDynamicComponent for App {
                     Box::new(
                         |terms: &mut FetchedTerms,
                          index: usize|
-                         -> (rune::Value, rune::runtime::SharedPointerGuard) {
-                            unsafe {
+                         -> (rune::Value, _) {
+                            let (value, guard) = unsafe {
                                 terms
                                     .fetch::<&mut T>(index)
                                     .as_mut()
                                     .unsafe_to_value()
                                     .unwrap()
-                            }
+                            };
+                            (value, Guards::Shared(guard))
                         },
                     ),
                 );
@@ -81,7 +83,7 @@ pub struct ComponentIdToFn(
     pub(crate)  HashMap<
         ComponentId,
         Box<
-            (dyn Fn(&mut FetchedTerms, usize) -> (rune::Value, rune::runtime::SharedPointerGuard)
+            (dyn Fn(&mut FetchedTerms, usize) -> (rune::Value, Guards)
                  + Sync
                  + Send),
         >,
@@ -114,14 +116,18 @@ impl std::ops::DerefMut for RuneModule {
     }
 }
 
+pub enum Guards {
+  Nil,
+  Shared(SharedPointerGuard),
+}
+
 fn post_setup_add_dynamic_components(world: &mut World) {
-    let component_id_to_fn = world.remove_resource::<ComponentIdToFn>().unwrap();
+    let mut component_id_to_fn = world.remove_resource::<ComponentIdToFn>().unwrap();
     let mut sources = world.remove_resource::<RuneSources>().unwrap();
     let mut s = Sources::new();
-    s.insert(Source::from_path("./src/my_component.rn").unwrap()).unwrap();
-    s.insert(Source::from_path("./src/load_dynamic.rune").unwrap()).unwrap();
+    //s.insert(Source::from_path("./src/query.rune").unwrap()).unwrap();
+    s.insert(Source::from_path("./src/query.rune").unwrap()).unwrap();
     sources.0.push(s);
-    /*sources.0.first_mut().unwrap().insert(Source::from_path("./src/load_dynamic.rune").unwrap()).expect("TODO: panic message");*/
     let mut context = world.remove_resource::<RuneContext>().unwrap();
     let mut diagnostics = world.remove_resource::<RuneDiagnostics>().unwrap();
     let mut runtime = world.remove_resource::<RuneRuntime>().unwrap();
@@ -152,9 +158,13 @@ fn post_setup_add_dynamic_components(world: &mut World) {
             let mut module = Module::new();
             for dynamic_component in vec.take().unwrap() {
                 let name = dynamic_component.type_info().unwrap();
-                let (name, hash) = match name {
-                    TypeInfo::Typed(a) => (a.item.to_string(), a.hash),
-                    TypeInfo::Variant(a) => (a.item.to_string(), a.hash),
+                let (name, hash, item) = match name {
+                    TypeInfo::Typed(a) => (a.item.to_string(), {
+                        a.hash
+                    }, a.item.try_clone().unwrap()),
+                    TypeInfo::Variant(a) => (a.item.to_string(), {
+                        a.hash
+                    }, a.item.try_clone().unwrap()),
                     a => return error!("wrong type of type trying to register, {:#?}", a),
                 };
                 let component_id = world.init_component_with_descriptor(unsafe {
@@ -166,41 +176,44 @@ fn post_setup_add_dynamic_components(world: &mut World) {
                     )
                 });
                 things_to_add.push((dynamic_component.clone(), component_id));
-                /*let len = match dynamic_component {
-                    Value::Struct(struc) => {
-                        struc.take().unwrap().data().len()
-                    }
-                    _ => panic!(),
-                };*/
-                module
-                    .dynamic_ty(
-                        hash,
-                        Hash::EMPTY,
-                        dynamic_component.type_info().unwrap(),
-                        &name,
-                        |module| Ok(()),
-                    )
-                    .unwrap();
-                module
-                    .function2("term_id", move || component_id.index())
-                    .unwrap()
-                    .build_associated_with(
-                        FullTypeOf::new(hash),
-                        dynamic_component.type_info().unwrap(),
-                    )
-                    .unwrap();
+                module.constant("TERM", component_id.index()).build().unwrap();
+                component_id_to_fn.0.insert(component_id, Box::new(|terms, index| unsafe {
+                    (terms.fetch::<&mut ValueWrapper>(index).as_mut().0.clone(), Guards::Nil)
+                }));
+                // module
+                //     .dynamic_ty(
+                //         hash,
+                //         Hash::EMPTY,
+                //         dynamic_component.type_info().unwrap(),
+                //         item,
+                //         |module| Ok(()),
+                //     )
+                //     .unwrap();
+                // module
+                //     .function2("term_id", move || component_id.index())
+                //     .unwrap()
+                //     .build_associated_with(
+                //         FullTypeOf::new(hash),
+                //         dynamic_component.type_info().unwrap(),
+                //     )
+                //     .unwrap();
                 context.0.install(&module).unwrap();
                 runtime = RuneRuntime(Arc::new(context.0.runtime().unwrap()));
-                info!("Bevy succeeded in adding the thing maybe?");
-                *source = Sources::new();
-                source.insert(Source::from_path("./src/my_component.rn").unwrap()).unwrap();
-                source.insert(Source::from_path("./src/query.rune").unwrap()).unwrap();
+                error!("Bevy succeeded in adding the thing maybe?");
+                source.insert(Source::from_path("./src/dynamic_stuff.rn").unwrap()).unwrap();
                 //module.ty();
             }
         }
     };
     func();
-   /* let mut entity = world.spawn_empty();
+    let mut entity = world.spawn_empty();
+    unsafe {
+        let t = things_to_add.remove(0);
+        OwningPtr::make(t.0, |a| {
+            entity.insert_by_id(t.1, a);
+        });
+    }
+    /*let mut entity = world.spawn_empty();
     unsafe {
         let data = std::alloc::alloc_zeroed(Layout::array::<u64>(size_of::<Value>()).unwrap());
         let mut val = things_to_add.first().unwrap().0.clone();
@@ -220,6 +233,12 @@ fn setup_sources(mut commands: Commands) {
     commands.insert_resource(RuneSources(vec![]));
     commands.insert_resource(RuneDiagnostics(diagnostics));
 }
+
+#[derive(Component)]
+pub struct ValueWrapper(pub Value);
+
+unsafe impl Send for ValueWrapper {}
+unsafe impl Sync for ValueWrapper {}
 
 fn setup_dynamic_queries(mut commands: Commands, rune_module: Res<RuneModule>) {
     let mut context = Context::with_default_modules().unwrap();

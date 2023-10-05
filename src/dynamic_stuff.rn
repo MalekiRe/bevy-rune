@@ -1,0 +1,4 @@
+pub fn get_query_terms() {
+    let terms = [TERM];
+    terms
+}
