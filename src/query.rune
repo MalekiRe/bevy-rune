@@ -1,0 +1,18 @@
+mod my_component;
+pub fn get_query_terms() {
+    //let terms = [Stretch::term_id()];
+    let terms = [my_component::MyDynamicComponent::term_id()];
+    terms
+}
+
+pub fn query(q) {
+  println("hi");
+  for items in q {
+     match items {
+        (dyn) => {
+            dbg(dyn);
+            return dyn.hi;
+        }
+     }
+  }
+}

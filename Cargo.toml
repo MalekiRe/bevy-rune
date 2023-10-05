@@ -6,5 +6,6 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-rune = {  path = "../../rune/crates/rune" }
+#rune = { git = "https://github.com/rune-rs/rune", branch = "more-functions"}
+rune = { path = "../../rune/crates/rune"}
 bevy = { git = "https://github.com/james-j-obrien/bevy", branch = "dynamic-term-builder"}

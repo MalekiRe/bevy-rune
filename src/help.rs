@@ -1,16 +1,26 @@
-use bevy::app::{App, Plugin, Startup};
-use bevy::ecs::component::ComponentId;
-use bevy::prelude::{FetchedTerms, ResMut, Resource, World};
-use bevy::ptr::PtrMut;
+use crate::{RuneContext, RuneDiagnostics, RuneRuntime, RuneSources};
+use bevy::app::{App, Plugin, PostStartup, PostUpdate, PreStartup, Startup};
+use bevy::ecs::component::{ComponentDescriptor, ComponentId, StorageType};
+use bevy::prelude::{error, Commands, FetchedTerms, QueryBuilder, Res, ResMut, Resource, Update, World, IntoSystemConfigs, info};
+use bevy::ptr::{OwningPtr, PtrMut};
 use bevy::reflect::TypePath;
-use rune::runtime::{SharedPointerGuard, UnsafeToValue};
+use rune::__private::FunctionMetaKind;
+use rune::runtime::{
+    FullTypeOf, OwnedTuple, Shared, SharedPointerGuard, TypeInfo, UnsafeToValue, VmError, VmResult,
+};
+use rune::termcolor::{ColorChoice, StandardStream};
+use rune::{Context, Diagnostics, Hash, Module, Source, Sources, ToValue, Value, Vm};
+use std::alloc::Layout;
+use std::any::{Any, TypeId};
 use std::collections::HashMap;
+use std::mem::size_of;
+use std::ptr::NonNull;
+use std::sync::Arc;
 
 pub trait AddDynamicComponent {
     fn add_dynamic_component<T>(&mut self)
     where
-        T: bevy::reflect::TypePath
-            + rune::Any
+        T: rune::Any
             + bevy::prelude::Component
             + rune::runtime::TypeOf
             + rune::module::InstallWith
@@ -21,8 +31,7 @@ pub trait AddDynamicComponent {
 impl AddDynamicComponent for App {
     fn add_dynamic_component<T>(&mut self)
     where
-        T: bevy::reflect::TypePath
-            + rune::Any
+        T: rune::Any
             + bevy::prelude::Component
             + rune::runtime::TypeOf
             + rune::module::InstallWith
@@ -30,19 +39,15 @@ impl AddDynamicComponent for App {
             + rune::runtime::MaybeTypeOf,
         for<'a> &'a mut T: rune::runtime::UnsafeToValue<Guard = SharedPointerGuard>,
     {
-        self.add_systems(Startup, |world: &mut World| {
+        self.add_systems(PreStartup, |world: &mut World| {
             let component_id = world.init_component::<T>();
-
             if let Some(mut rune_module) = world.get_resource_mut::<RuneModule>() {
                 rune_module.ty::<T>().unwrap();
-                /*rune_module
-                    .associated_function("term_id", |value: &T| T::type_path().to_string())
-                    .unwrap();*/
-                rune_module.function_meta(|| {
-                    Ok(rune::__private::FunctionMetaData { kind: rune::__private::FunctionMetaKind::function("term_id", || {
-                        T::type_path()
-                    })?.build_associated::<T>()?, name: "term_id", docs: &[][..], arguments: &[][..] })
-                }).unwrap();
+                rune_module
+                    .function2("term_id", move || component_id.index())
+                    .unwrap()
+                    .build_associated::<T>()
+                    .unwrap();
             } else {
                 panic!("make sure to add the RunePlugin plugin");
             }
@@ -67,36 +72,13 @@ impl AddDynamicComponent for App {
             } else {
                 panic!("make sure to add the RunePlugin plugin");
             }
-
-            if let Some(mut type_path_to_component_id) =
-                world.get_resource_mut::<TypePathToComponentId>()
-            {
-                type_path_to_component_id
-                    .0
-                    .insert(T::type_path(), component_id);
-            } else {
-                panic!("make sure to add the RunePlugin plugin")
-            }
         });
     }
 }
-#[derive(rune::Any)]
-struct Temp {
-
-}
-impl Temp {
-    #[rune::function(path = Self::new)]
-    fn hi() {
-        
-    }
-}/*
-pub(crate) fn hi() -> rune::alloc::Result<rune::__private::FunctionMetaData> { 
-    Ok(rune::__private::FunctionMetaData { kind: rune::__private::FunctionMetaKind::function("new", Self::__rune_fn__hi)?.build_associated::<Self>()?, name: "hi", docs: &[][..], arguments: &[][..] }) 
-}*/
 
 #[derive(Default, Resource)]
 pub struct ComponentIdToFn(
-    pub(crate) HashMap<
+    pub(crate)  HashMap<
         ComponentId,
         Box<
             (dyn Fn(&mut FetchedTerms, usize) -> (rune::Value, rune::runtime::SharedPointerGuard)
@@ -105,15 +87,16 @@ pub struct ComponentIdToFn(
         >,
     >,
 );
-#[derive(Default, Resource)]
-pub struct TypePathToComponentId(pub(crate) HashMap<&'static str, ComponentId>);
 
 pub struct RunePlugin;
 impl Plugin for RunePlugin {
     fn build(&self, app: &mut App) {
         app.insert_resource(RuneModule(rune::Module::new()));
-        app.insert_resource(TypePathToComponentId::default());
         app.insert_resource(ComponentIdToFn::default());
+        app.add_systems(PreStartup, setup_sources);
+        app.add_systems(Startup, setup_dynamic_queries);
+        app.add_systems(Update, dynamic_queries);
+        app.add_systems(PostStartup, post_setup_add_dynamic_components);
     }
 }
 #[derive(Resource)]
@@ -129,4 +112,243 @@ impl std::ops::DerefMut for RuneModule {
     fn deref_mut(&mut self) -> &mut Self::Target {
         &mut self.0
     }
+}
+
+fn post_setup_add_dynamic_components(world: &mut World) {
+    let component_id_to_fn = world.remove_resource::<ComponentIdToFn>().unwrap();
+    let mut sources = world.remove_resource::<RuneSources>().unwrap();
+    let mut s = Sources::new();
+    s.insert(Source::from_path("./src/my_component.rn").unwrap()).unwrap();
+    s.insert(Source::from_path("./src/load_dynamic.rune").unwrap()).unwrap();
+    sources.0.push(s);
+    /*sources.0.first_mut().unwrap().insert(Source::from_path("./src/load_dynamic.rune").unwrap()).expect("TODO: panic message");*/
+    let mut context = world.remove_resource::<RuneContext>().unwrap();
+    let mut diagnostics = world.remove_resource::<RuneDiagnostics>().unwrap();
+    let mut runtime = world.remove_resource::<RuneRuntime>().unwrap();
+    let mut things_to_add = vec![];
+    let mut func = || {
+        for source in &mut sources.0 {
+            let result = rune::prepare(source)
+                .with_context(&context.0)
+                .with_diagnostics(&mut diagnostics.0)
+                .build();
+
+            if !diagnostics.0.is_empty() {
+                let mut writer = StandardStream::stderr(ColorChoice::Always);
+                diagnostics.0.emit(&mut writer, &source).unwrap();
+                error!("diagnostics failed");
+                return;
+            }
+
+            let result = result.unwrap();
+            let mut vm = Vm::new(runtime.0.clone(), Arc::new(result));
+            let vec = match vm.call(["dynamic_components"], ()) {
+                Ok(output) => match output.into_vec() {
+                    VmResult::Ok(vec) => vec,
+                    VmResult::Err(err) => return error!("AAA {}", err),
+                },
+                Err(err) => return error!("AAA {}", err),
+            };
+            let mut module = Module::new();
+            for dynamic_component in vec.take().unwrap() {
+                let name = dynamic_component.type_info().unwrap();
+                let (name, hash) = match name {
+                    TypeInfo::Typed(a) => (a.item.to_string(), a.hash),
+                    TypeInfo::Variant(a) => (a.item.to_string(), a.hash),
+                    a => return error!("wrong type of type trying to register, {:#?}", a),
+                };
+                let component_id = world.init_component_with_descriptor(unsafe {
+                    ComponentDescriptor::new_with_layout(
+                        name.clone(),
+                        StorageType::Table,
+                        Layout::array::<u64>(size_of::<Value>()).unwrap(),
+                        None,
+                    )
+                });
+                things_to_add.push((dynamic_component.clone(), component_id));
+                /*let len = match dynamic_component {
+                    Value::Struct(struc) => {
+                        struc.take().unwrap().data().len()
+                    }
+                    _ => panic!(),
+                };*/
+                module
+                    .dynamic_ty(
+                        hash,
+                        Hash::EMPTY,
+                        dynamic_component.type_info().unwrap(),
+                        &name,
+                        |module| Ok(()),
+                    )
+                    .unwrap();
+                module
+                    .function2("term_id", move || component_id.index())
+                    .unwrap()
+                    .build_associated_with(
+                        FullTypeOf::new(hash),
+                        dynamic_component.type_info().unwrap(),
+                    )
+                    .unwrap();
+                context.0.install(&module).unwrap();
+                runtime = RuneRuntime(Arc::new(context.0.runtime().unwrap()));
+                info!("Bevy succeeded in adding the thing maybe?");
+                *source = Sources::new();
+                source.insert(Source::from_path("./src/my_component.rn").unwrap()).unwrap();
+                source.insert(Source::from_path("./src/query.rune").unwrap()).unwrap();
+                //module.ty();
+            }
+        }
+    };
+    func();
+   /* let mut entity = world.spawn_empty();
+    unsafe {
+        let data = std::alloc::alloc_zeroed(Layout::array::<u64>(size_of::<Value>()).unwrap());
+        let mut val = things_to_add.first().unwrap().0.clone();
+        data.copy_from((&mut val) as *mut Value as *mut _ as *mut u8, 1);
+        let a = NonNull::new_unchecked(data);
+        entity.insert_by_id(things_to_add.first().unwrap().1, OwningPtr::new(a));
+    }*/
+    world.insert_resource(runtime);
+    world.insert_resource(sources);
+    world.insert_resource(diagnostics);
+    world.insert_resource(context);
+    world.insert_resource(component_id_to_fn);
+}
+
+fn setup_sources(mut commands: Commands) {
+    let diagnostics = Diagnostics::new();
+    commands.insert_resource(RuneSources(vec![]));
+    commands.insert_resource(RuneDiagnostics(diagnostics));
+}
+
+fn setup_dynamic_queries(mut commands: Commands, rune_module: Res<RuneModule>) {
+    let mut context = Context::with_default_modules().unwrap();
+    context.install(&rune_module.0).unwrap();
+    let runtime = context.runtime().unwrap();
+    commands.insert_resource(RuneContext(context));
+    commands.insert_resource(RuneRuntime(Arc::new(runtime)));
+}
+
+pub fn dynamic_queries(world: &mut World) {
+    let component_id_to_fn = world.remove_resource::<ComponentIdToFn>().unwrap();
+    let mut sources = world.remove_resource::<RuneSources>().unwrap();
+    let context = world.remove_resource::<RuneContext>().unwrap();
+    let mut diagnostics = world.remove_resource::<RuneDiagnostics>().unwrap();
+    let runtime = world.remove_resource::<RuneRuntime>().unwrap();
+    let mut func = || {
+        for sources in sources.0.iter_mut() {
+            let result = rune::prepare(sources)
+                .with_context(&context.0)
+                .with_diagnostics(&mut diagnostics.0)
+                .build();
+
+            if !diagnostics.0.is_empty() {
+                let mut writer = StandardStream::stderr(ColorChoice::Always);
+                diagnostics.0.emit(&mut writer, &sources).unwrap();
+                return;
+            }
+
+            let result = result.unwrap();
+            let mut vm = Vm::new(runtime.0.clone(), Arc::new(result));
+            let output = match vm.call(["get_query_terms"], ()) {
+                Ok(output) => output,
+                Err(err) => return error!("{}", err),
+            };
+
+            let mut query = QueryBuilder::<()>::new(world);
+
+            let mut query_component_ids = vec![];
+            for i in output.into_vec().unwrap().take().unwrap() {
+                match i.into_usize() {
+                    VmResult::Ok(i) => {
+                        query_component_ids.push(ComponentId::new(i));
+                    }
+                    VmResult::Err(err) => return error!("{}", err),
+                }
+            }
+            for component_id in &query_component_ids {
+                query.ref_by_id(*component_id);
+            }
+
+            let mut query = query.build();
+
+            let mut query_iter = vec![];
+            let mut guards = vec![];
+
+            let result = rune::prepare(sources)
+                .with_context(&context.0)
+                .with_diagnostics(&mut diagnostics.0)
+                .build();
+
+            if !diagnostics.0.is_empty() {
+                let mut writer = StandardStream::stderr(ColorChoice::Always);
+                diagnostics.0.emit(&mut writer, &sources).unwrap();
+                return;
+            }
+
+            let result = result.unwrap();
+
+            query.iter_raw(world).for_each(|mut terms| {
+                let mut v = vec![];
+                for (i, component_id) in query_component_ids.iter().enumerate() {
+                    let (value, guard) = (match component_id_to_fn.0.get(component_id) {
+                        None => return error!("missing component ID in map of component_id_to_fn"),
+                        Some(res) => res,
+                    }(&mut terms, i));
+                    v.push(value);
+                    guards.push(guard);
+                }
+                let v = OwnedTuple::try_from(v).unwrap();
+                query_iter.push(v.to_value().unwrap());
+            });
+
+            let query_iter = query_iter.to_value().unwrap();
+
+            let mut vm = Vm::new(runtime.0.clone(), Arc::new(result));
+            match vm.call(["query"], (query_iter,)) {
+                Err(err) => error!("error running query: {}", err),
+                _ => {}
+            };
+        }
+    };
+    func();
+    world.insert_resource(runtime);
+    world.insert_resource(sources);
+    world.insert_resource(diagnostics);
+    world.insert_resource(context);
+    world.insert_resource(component_id_to_fn);
+}
+
+pub fn all_modules(#[allow(unused)] stdio: bool) -> Result<Context, rune::ContextError> {
+    let mut this = Context::new();
+    // This must go first, because it includes types which are used in other modules.
+    this.install(rune::modules::core::module()?)?;
+
+    this.install(rune::modules::num::module()?)?;
+    //this.install(rune::modules::any::module()?)?;
+    this.install(rune::modules::bytes::module()?)?;
+    this.install(rune::modules::char::module()?)?;
+    this.install(rune::modules::hash::module()?)?;
+    this.install(rune::modules::cmp::module()?)?;
+    this.install(rune::modules::collections::module()?)?;
+    this.install(rune::modules::f64::module()?)?;
+    this.install(rune::modules::tuple::module()?)?;
+    this.install(rune::modules::fmt::module()?)?;
+    this.install(rune::modules::future::module()?)?;
+    this.install(rune::modules::i64::module()?)?;
+    #[cfg(feature = "std")]
+    this.install(crate::modules::io::module(stdio)?)?;
+    this.install(rune::modules::iter::module()?)?;
+    this.install(rune::modules::macros::module()?)?;
+    this.install(rune::modules::mem::module()?)?;
+    this.install(rune::modules::object::module()?)?;
+    this.install(rune::modules::ops::module()?)?;
+    this.install(rune::modules::option::module()?)?;
+    this.install(rune::modules::result::module()?)?;
+    this.install(rune::modules::stream::module()?)?;
+    this.install(rune::modules::string::module()?)?;
+    this.install(rune::modules::test::module()?)?;
+    this.install(rune::modules::vec::module()?)?;
+    /*this.has_default_modules = true;*/
+    Ok(this)
 }
