@@ -2,7 +2,12 @@
 pub fn foo(query) {
     for i in query {
         match i {
-            (stretch) => dbg!("{stretch}"),
+            (stretch) => {
+                if stretch.x > 3.0 {
+                    //stretch.x = 0.001;
+                }
+                //stretch.x += 0.1;
+            }
         }
     }
 }

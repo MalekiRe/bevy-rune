@@ -1,7 +1,7 @@
 use crate::help::RuneModule;
 use crate::magic::{Query, QueryType};
 use bevy::asset::anyhow::Error;
-use bevy::asset::io::Reader;
+use bevy::asset::io::{Reader, Writer};
 use bevy::asset::{
     Asset, AssetLoader, AsyncReadExt, LoadContext, UntypedAssetId, VisitAssetDependencies,
 };
@@ -18,6 +18,8 @@ use std::str::FromStr;
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use anyhow::bail;
+use bevy::asset::meta::AssetMeta;
+use bevy::asset::processor::{Process, ProcessContext, ProcessError};
 
 pub struct RuneAssetLoader {
     module: RuneModule,
