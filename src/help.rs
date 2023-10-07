@@ -20,7 +20,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::channel;
 use bevy::ecs::change_detection::MutUntyped;
-use rune::bevy_stuff::UnsafeToValue2;
+use rune::bevy_related::UnsafeToValue2;
 use crate::rune_systems::update_system;
 
 #[derive(Any, Clone, Copy)]
@@ -81,9 +81,6 @@ impl AddDynamicComponent for App {
                                     }
                                     QueryType::Mut => {
                                         let mut thing = terms.fetch::<&mut T>(index);
-                                        let thing: Mut<T> = unsafe {
-                                            std::mem::transmute(thing)
-                                        };
                                         let (value, guard) = UnsafeToValue2::unsafe_to_value(thing).unwrap();
                                         (value, Guards::Shared(guard))
                                     }

@@ -7,6 +7,6 @@ edition = "2021"
 
 [dependencies]
 #rune = { git = "https://github.com/rune-rs/rune", branch = "more-functions"}
-rune = { path = "../../rune/crates/rune"}
+rune = { path = "../../rune2/crates/rune", features = ["bevy"]}
 bevy = { git = "https://github.com/james-j-obrien/bevy", branch = "dynamic-term-builder"}
 anyhow = "1.0.75"

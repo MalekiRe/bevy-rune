@@ -1,12 +1,11 @@
-#[system(Update, query: Query<&Stretch>)]
+#[system(Update, query: Query<&mut Stretch>)]
 pub fn foo(query) {
     for i in query {
         match i {
             (stretch) => {
-                if stretch.x > 3.0 {
-                    //stretch.x = 0.001;
+                if stretch.x != 6.0 {
+                    stretch.x = 6.0;
                 }
-                //stretch.x += 0.1;
             }
         }
     }
