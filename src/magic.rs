@@ -1,8 +1,75 @@
 use bevy::prelude::Transform;
 use bevy::reflect::Typed;
 use rune::compile::Named;
+use rune::macros::{quote, MacroContext, TokenStream};
+use rune::parse::Parser;
 use rune::runtime::RawStr;
-use rune::{Any, Hash};
+use rune::{ast, compile, Any, Hash};
+
+pub enum QueryType<'a> {
+    Ref(&'a str),
+    Mut(&'a str),
+}
+
+pub struct Query<'a> {
+    pub param_name: &'a str,
+    pub query_types: Vec<QueryType<'a>>,
+}
+impl Query<'_> {
+    pub fn new<'a>(param_name: &'a str) -> Query<'a> {
+        Query {
+            param_name,
+            query_types: vec![],
+        }
+    }
+}
+
+#[rune::attribute_macro]
+fn system(
+    cx: &mut MacroContext<'_, '_, '_>,
+    stream1: &TokenStream,
+    stream2: &TokenStream,
+) -> compile::Result<TokenStream> {
+    let mut parser = Parser::from_token_stream(stream2, cx.input_span());
+
+    parser.parse::<ast::Fn>()?;
+    let system_name = parser.parse::<ast::Ident>()?;
+    parser.parse::<ast::OpenParen>()?;
+    let mut queries = vec![];
+    while !parser.peek::<ast::CloseParen>()? {
+        let param_name = parser.parse::<ast::Ident>().unwrap();
+        parser.parse::<ast::Colon>().unwrap();
+        let param_type_name = parser.parse::<ast::Ident>().unwrap();
+        let param_type_name = cx.resolve(param_type_name).unwrap();
+        let mut query = Query::new(param_type_name);
+        match param_type_name {
+            "Query" => {
+                parser.parse::<ast::OpenBrace>().unwrap();
+                while !parser.peek::<ast::CloseBrace>()? {
+                    let query_type = if parser.peek::<ast::Mut>()? {
+                        parser.parse::<ast::Mut>().unwrap();
+                        QueryType::Mut(cx.resolve(parser.parse::<ast::Ident>().unwrap()).unwrap())
+                    } else {
+                        QueryType::Ref(cx.resolve(parser.parse::<ast::Ident>().unwrap()).unwrap())
+                    };
+                    query.query_types.push(query_type);
+                }
+                parser.parse::<ast::CloseBrace>().unwrap();
+            }
+            "Commands" => {}
+            "Res" => {}
+            "ResMut" => {}
+            &_ => {
+                panic!("param type name was not Query, Commands, Res or ResMut");
+            }
+        }
+        queries.push(query);
+    }
+    parser.parse::<ast::CloseParen>()?;
+
+    let mut output = quote!(0);
+    Ok(output.into_token_stream(cx)?)
+}
 
 struct TransformWrapper(pub Transform);
 

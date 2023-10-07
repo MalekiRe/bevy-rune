@@ -1,0 +1,8 @@
+#[system(Update, query: Query<&Stretch>)]
+pub fn foo(query) {
+    for i in query {
+        match i {
+            (stretch) => dbg!("{stretch}"),
+        }
+    }
+}

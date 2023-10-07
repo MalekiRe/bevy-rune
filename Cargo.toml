@@ -9,3 +9,4 @@ edition = "2021"
 rune = { git = "https://github.com/rune-rs/rune", branch = "more-functions"}
 #rune = { path = "../../rune/crates/rune"}
 bevy = { git = "https://github.com/james-j-obrien/bevy", branch = "dynamic-term-builder"}
+anyhow = "1.0.75"

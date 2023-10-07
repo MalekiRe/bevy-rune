@@ -1,15 +1,14 @@
 mod help;
 mod magic;
+mod rune_asset_loader;
+mod rune_systems;
 
 use crate::help::{AddDynamicComponent, ComponentIdToFn, RuneModule, RunePlugin};
+use crate::rune_asset_loader::{RuneAssetLoader, RuneVm};
 use bevy::app::{App, PostStartup, Update};
 use bevy::ecs::component::ComponentId;
 use bevy::log::error;
-use bevy::prelude::{
-    shape, warn, Assets, Camera2dBundle, Color, ColorMaterial, Commands, Component, FetchedTerms,
-    Mesh, Mut, Query, QueryBuilder, Reflect, Res, ResMut, Resource, Startup, Transform, Vec3,
-    World,
-};
+use bevy::prelude::{shape, warn, AssetApp, AssetServer, Assets, Camera2dBundle, Color, ColorMaterial, Commands, Component, FetchedTerms, Handle, Mesh, Mut, Query, QueryBuilder, Reflect, Res, ResMut, Resource, Startup, Transform, Vec3, World, AssetEvent};
 use bevy::ptr::{Ptr, PtrMut};
 use bevy::reflect::TypePath;
 use bevy::sprite::MaterialMesh2dBundle;
@@ -33,10 +32,19 @@ fn main() {
     println!("Hello, world!");
     let mut app = App::new();
     app.add_plugins(DefaultPlugins);
+    app.add_systems(Startup, |asset_server: Res<AssetServer>, mut commands: Commands| {
+        let handle: Handle<RuneVm> = asset_server.load("foo.rune");
+        commands.spawn(handle);
+    });
+    /*app.add_systems(Update, |mut events: bevy::prelude::EventReader<AssetEvent<RuneVm>>| {
+        for ev in events.read() {
+            warn!("{:#?}", ev);
+        }
+    });*/
     app.add_plugins(RunePlugin);
     app.add_dynamic_component::<Stretch>();
-    app.add_systems(Update, every_tick);
-    app.add_systems(PostStartup, startup);
+    //app.add_systems(Update, every_tick);
+    app.add_systems(Startup, startup);
     app.run();
 }
 #[derive(Component, Any, TypePath, Debug)]
@@ -53,7 +61,6 @@ pub fn startup(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<ColorMaterial>>,
-    mut sources: ResMut<RuneSources>,
 ) {
     commands.spawn(Camera2dBundle::default());
     commands.spawn((
@@ -69,10 +76,6 @@ pub fn startup(
             test: TestStruct { yo: 0 },
         },
     ));
-    /*let mut s = Sources::new();
-    s.insert(Source::from_path("./src/query.rune").unwrap())
-        .unwrap();
-    sources.0.push(s);*/
 }
 
 pub fn every_tick(q: Query<&Stretch>) {
