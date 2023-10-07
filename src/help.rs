@@ -1,8 +1,8 @@
-use crate::rune_asset_loader::{RuneAssetLoader, RuneProcessor, RuneVm};
-use crate::{RuneContext, RuneDiagnostics, RuneRuntime, RuneSources, TriggerChangeDetection, Wrapper};
+use crate::rune_asset_loader::{RuneAssetLoader, RuneVm};
+use crate::{RuneContext, RuneDiagnostics, RuneRuntime, RuneSources};
 use bevy::app::{App, Plugin, PostStartup, PostUpdate, PreStartup, Startup};
 use bevy::ecs::component::{ComponentDescriptor, ComponentId, StorageType};
-use bevy::prelude::{error, info, AssetApp, Commands, Component, FetchedTerms, IntoSystemConfigs, QueryBuilder, Res, ResMut, Resource, Update, World, DetectChangesMut};
+use bevy::prelude::{error, info, AssetApp, Commands, Component, FetchedTerms, IntoSystemConfigs, QueryBuilder, Res, ResMut, Resource, Update, World, DetectChangesMut, Mut};
 use bevy::ptr::{OwningPtr, PtrMut};
 use bevy::reflect::TypePath;
 use rune::__private::FunctionMetaKind;
@@ -20,6 +20,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::sync::mpsc::channel;
 use bevy::ecs::change_detection::MutUntyped;
+use rune::bevy_stuff::UnsafeToValue2;
 use crate::rune_systems::update_system;
 
 #[derive(Any, Clone, Copy)]
@@ -36,8 +37,7 @@ pub trait AddDynamicComponent {
             + rune::runtime::TypeOf
             + rune::module::InstallWith
             + Sized
-            + rune::runtime::MaybeTypeOf
-            + TriggerChangeDetection,
+            + rune::runtime::MaybeTypeOf,
         for<'a> &'a mut T: rune::runtime::UnsafeToValue<Guard = SharedPointerGuard>,
         for<'a> &'a T: rune::runtime::UnsafeToValue<Guard = SharedPointerGuard>,
     ;
@@ -50,8 +50,7 @@ impl AddDynamicComponent for App {
             + rune::runtime::TypeOf
             + rune::module::InstallWith
             + Sized
-            + rune::runtime::MaybeTypeOf
-            + TriggerChangeDetection,
+            + rune::runtime::MaybeTypeOf,
         for<'a> &'a mut T: rune::runtime::UnsafeToValue<Guard = SharedPointerGuard>,
         for<'a> &'a T: rune::runtime::UnsafeToValue<Guard = SharedPointerGuard>,
     {
@@ -82,11 +81,10 @@ impl AddDynamicComponent for App {
                                     }
                                     QueryType::Mut => {
                                         let mut thing = terms.fetch::<&mut T>(index);
-                                        let thing = thing.bypass_change_detection();
-                                        let mut untyped = terms.fetch::<PtrMut>(index);
-                                        let wrapper = Wrapper(untyped);
-                                        thing.add_thing(wrapper);
-                                        let (value, guard) = thing.unsafe_to_value().unwrap();
+                                        let thing: Mut<T> = unsafe {
+                                            std::mem::transmute(thing)
+                                        };
+                                        let (value, guard) = UnsafeToValue2::unsafe_to_value(thing).unwrap();
                                         (value, Guards::Shared(guard))
                                     }
                                 }

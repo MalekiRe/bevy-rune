@@ -53,131 +53,13 @@ fn main() {
     app.add_systems(Startup, startup);
     app.run();
 }
-#[derive(Component, TypePath, Debug)]
+#[derive(Component, Any, TypePath, Debug)]
 pub struct Stretch {
-    //#[rune(get, set, add_assign, copy)]
+    #[rune(get, set, add_assign, copy)]
     x: f32,
-    //#[rune(get, set, add_assign, copy)]
+    #[rune(get, set, add_assign, copy)]
     y: f32,
-    test: Option<Wrapper<'static>>,
 }
-
-
-impl TriggerChangeDetection for Stretch {
-    fn trigger_change_detection(&mut self) {
-        self.test.as_mut().unwrap().0.set_changed();
-    }
-    fn add_thing(&mut self, mut thing: Wrapper) {
-        let thing = unsafe {
-            std::mem::transmute(thing)
-        };
-        self.test.replace(thing);
-    }
-}
-
-pub trait TriggerChangeDetection {
-    fn trigger_change_detection(&mut self);
-    fn add_thing(&mut self, thing: Wrapper);
-}
-
-#[automatically_derived]
-impl rune::__private::InstallWith for Stretch {
-    fn install_with(#[allow(unused)] module: &mut rune::__private::Module) -> core::result::Result<(), rune::compile::ContextError> {
-        module.field_function(rune::runtime::Protocol::GET, "x", |s: &Self| s.x)?;
-        module.field_function(rune::runtime::Protocol::SET, "x", |s: &mut Self, value: f32| { s.x = value; })?;
-        module.field_function(rune::runtime::Protocol::ADD_ASSIGN, "x", |s: &mut Self, value: f32| { s.x += value; })?;
-        module.field_function(rune::runtime::Protocol::GET, "y", |s: &Self| s.y)?;
-        module.field_function(rune::runtime::Protocol::SET, "y", |s: &mut Self, value: f32| { s.y = value; })?;
-        module.field_function(rune::runtime::Protocol::ADD_ASSIGN, "y", |s: &mut Self, value: f32| { s.y += value; })?;
-        module.type_meta::<Self>()?.make_named_struct(&["x", "y", "test", ])?.static_docs(&[])?;
-        Ok(())
-    }
-}
-#[automatically_derived]
-impl rune::compile::Named for Stretch {
-    const BASE_NAME: rune::runtime::RawStr = rune::runtime::RawStr::from_str("Stretch");
-}
-#[automatically_derived]
-impl rune::runtime::TypeOf for Stretch {
-    #[inline]
-    fn type_hash() -> rune::Hash { <Self as rune::Any>::type_hash() }
-    #[inline]
-    fn type_parameters() -> rune::Hash { rune::Hash::EMPTY }
-    #[inline]
-    fn type_info() -> rune::runtime::TypeInfo { rune::runtime::TypeInfo::Any(rune::runtime::AnyTypeInfo::__private_new(rune::runtime::RawStr::from_str(core::any::type_name::<Self>()), <Self as rune::runtime::TypeOf>::type_hash())) }
-}
-#[automatically_derived]
-impl rune::runtime::MaybeTypeOf for Stretch {
-    #[inline]
-    fn maybe_type_of() -> Option<rune::runtime::FullTypeOf> { Some(<Self as rune::runtime::TypeOf>::type_of()) }
-}
-#[automatically_derived]
-impl rune::Any for Stretch {
-    fn type_hash() -> rune::Hash { rune::Hash::new(16272786712427842834u64) }
-}
-#[automatically_derived]
-impl rune::runtime::UnsafeToRef for Stretch {
-    type Guard = rune::runtime::RawRef;
-    unsafe fn unsafe_to_ref<'a>(value: rune::runtime::Value) -> rune::runtime::VmResult<(&'a Self, Self::Guard)> {
-        let (value, guard) = match ::rune::runtime::try_result((value.into_any_ptr())) {
-            ::rune::runtime::VmResult::Ok(value) => value,
-            ::rune::runtime::VmResult::Err(err) => {
-                return ::rune::runtime::VmResult::Err(::rune::runtime::VmError::from(err));
-            }
-        };
-        rune::runtime::VmResult::Ok((::core::ptr::NonNull::as_ref(&value), guard))
-    }
-}
-#[automatically_derived]
-impl rune::runtime::UnsafeToMut for Stretch {
-    type Guard = rune::runtime::RawMut;
-    unsafe fn unsafe_to_mut<'a>(value: rune::runtime::Value) -> rune::runtime::VmResult<(&'a mut Self, Self::Guard)> {
-        let (mut value, guard) = match ::rune::runtime::try_result((value.into_any_mut())) {
-            ::rune::runtime::VmResult::Ok(value) => value,
-            ::rune::runtime::VmResult::Err(err) => {
-                return ::rune::runtime::VmResult::Err(::rune::runtime::VmError::from(err));
-            }
-        };
-        let val: &mut Self = ::core::ptr::NonNull::as_mut(&mut value);
-        val.trigger_change_detection();
-        rune::runtime::VmResult::Ok((val, guard))
-    }
-}
-#[automatically_derived]
-impl rune::runtime::UnsafeToValue for &Stretch {
-    type Guard = rune::runtime::SharedPointerGuard;
-    unsafe fn unsafe_to_value(self) -> rune::runtime::VmResult<(rune::runtime::Value, Self::Guard)> {
-        let (shared, guard) = match ::rune::runtime::try_result((rune::runtime::Shared::from_ref(self))) {
-            ::rune::runtime::VmResult::Ok(value) => value,
-            ::rune::runtime::VmResult::Err(err) => {
-                return ::rune::runtime::VmResult::Err(::rune::runtime::VmError::from(err));
-            }
-        };
-        rune::runtime::VmResult::Ok((rune::runtime::Value::from(shared), guard))
-    }
-}
-#[automatically_derived]
-impl rune::runtime::UnsafeToValue for &mut Stretch {
-    type Guard = rune::runtime::SharedPointerGuard;
-    unsafe fn unsafe_to_value(self) -> rune::runtime::VmResult<(rune::runtime::Value, Self::Guard)> {
-        let (shared, guard) = match ::rune::runtime::try_result((rune::runtime::Shared::from_mut(self))) {
-            ::rune::runtime::VmResult::Ok(value) => value,
-            ::rune::runtime::VmResult::Err(err) => {
-                return ::rune::runtime::VmResult::Err(::rune::runtime::VmError::from(err));
-            }
-        };
-        rune::runtime::VmResult::Ok((rune::runtime::Value::from(shared), guard))
-    }
-}
-
-pub struct Wrapper<'a>(MutUntyped<'a>);
-impl Debug for Wrapper<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        Ok(())
-    }
-}
-unsafe impl Send for Wrapper<'_>{}
-unsafe impl Sync for Wrapper<'_>{}
 
 pub fn startup(
     mut commands: Commands,
@@ -195,7 +77,6 @@ pub fn startup(
         Stretch {
             x: 1.0,
             y: 1.0,
-            test: None,
         },
     ));
 }
